@@ -874,7 +874,8 @@ static void dispatch_paged_attention_gqa_decode(
   std::string name = gqa_decode_kernel_name(
       encoding.dt, metadata.head_size, metadata.block_size, plan.gqa_partition_size);
   std::string hash = name + (plan.compact ? "_compact1" : "_compact0");
-  const int num_threads = 32 * (metadata.num_heads / metadata.num_kv_heads);
+  // Four simdgroups: two key slices x two halves of the head dims.
+  constexpr int num_threads = 128;
   // Instantiated in pagedattention.metal and shipped in the v2 metallib.
   // A missing specialization is a build/packaging bug: fail loudly
   // rather than silently drop eligible long decode back to the slower
@@ -914,8 +915,10 @@ static void dispatch_paged_attention_gqa_decode(
   enc.set_bytes(g_max_blocks, 13);
   bind_paged_attn_strides(enc, arrays.query, arrays.key_cache, metadata.block_size);
   if (plan.compact) enc.set_input_array(*g_offsets, 18);
-  // One threadgroup per (partition, kv head, sequence); each simdgroup
-  // owns one query head of the GQA group.
+  int32_t g_nheads = static_cast<int32_t>(metadata.num_heads);
+  enc.set_bytes(g_nheads, 19);
+  // One threadgroup per (partition, kv head, sequence); the GQA group's
+  // query heads are the rows of its simdgroup MMAs.
   enc.dispatch_threadgroups(
       MTL::Size::Make(gqa_num_partitions, metadata.num_kv_heads, plan.num_seqs),
       MTL::Size::Make(num_threads, 1, 1));

@@ -112,12 +112,17 @@ supported size that evenly divides the scheduler page is selected: an 800- or
 Translated page IDs address their kernel-sized subpages even when upstream
 K/V storage remains unreshaped.
 
-The GQA producer walks pages rather than tokens. Lane 0 preloads the next
-valid block-table entry and `simd_shuffle` broadcasts it within each SIMD
-group. A 4-token inner step computes independent QK dots and combines their
-online-softmax update; a scalar remainder handles the final 1-3 tokens.
-Every tier reads K/V directly, without threadgroup staging or barriers.
-Online-softmax state stays in registers.
+The GQA producer runs one threadgroup of four SIMD groups per partition,
+KV head and request. The group's query heads are the rows of 8x8
+simdgroup MMAs: `S = Q K^T` and `O += P V` run on the matrix units, so each
+K/V row is read once per threadgroup instead of once per query head. Two
+SIMD-group pairs take turns over 8-key blocks, which never cross a page;
+inside a pair each SIMD group owns half of the head dimensions, and the pair
+sums its partial scores through threadgroup memory with one barrier per
+block. K/V are read directly from device memory as 16-byte loads per lane.
+MMA operands are FP16 for both FP16 and BF16 caches, with FP32 accumulation:
+GPUs before Apple family 9 have no BF16 simdgroup MMA, and the BF16-to-FP16
+conversion is exact for magnitudes between 6.1e-5 and 65504.
 
 The producer writes the same log2-space `(max, exp-sum)` plus
 epsilon-normalized `tmp_out` contract as split-KV. The shared
@@ -240,7 +245,7 @@ The 1056-token upstream-page case also exercises the real block-table
 translation and unreshaped K/V storage: the block32 kernel addresses each
 translated page with its 32-token stride.
 Remainder tests cover block16/block32 pages and final page lengths that
-exercise both the 4-token loop and the scalar tail. Long-context page
+end inside an 8-key block, so masked keys and zeroed value rows are exercised. Long-context page
 tables use a bounded permutation to avoid inflating the physical cache.
 Resource-limit tests reject oversized forced partitions before Metal
 encoding, then check that a larger partition computes the same history.
