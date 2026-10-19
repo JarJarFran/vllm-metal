@@ -31,10 +31,15 @@ logger = logging.getLogger(__name__)
 # transient profile peak that profile_run charges against the KV budget, so
 # the default applies only where its measured overhead stays a small share of
 # the usable budget, and never for #585's large-batch shape. Measurements in
-# PR #637.
+# PR #637 (>= 90 GiB usable) and, for the mid tier, on a 64 GB M1 Max: 1000
+# MB cut single-stream TPOT ~9% on Qwen3.6-35B-A3B-4bit and Qwen3.8-27B-4bit
+# for ~15-18 GB of profiled overhead at 2048 batched tokens.
 _MB_BUFFER_DEFAULT = "2000"
 _MB_BUFFER_MIN_USABLE_GIB = 90
 _MB_BUFFER_MAX_BATCHED_TOKENS = 4096
+_MB_BUFFER_MID_DEFAULT = "1000"
+_MB_BUFFER_MID_MIN_USABLE_GIB = 56
+_MB_BUFFER_MID_MAX_BATCHED_TOKENS = 2048
 # Only the local executors share this process's memory and inherit its
 # environment; Ray workers must not receive a driver-derived value.
 _MB_BUFFER_LOCAL_BACKENDS = ("uni", "mp")
@@ -62,6 +67,11 @@ def _pick_mb_buffer_default(
     usable_gib = total_memory_bytes / (1 << 30) * memory_fraction
     if usable_gib >= _MB_BUFFER_MIN_USABLE_GIB:
         return _MB_BUFFER_DEFAULT
+    if (
+        usable_gib >= _MB_BUFFER_MID_MIN_USABLE_GIB
+        and max_num_batched_tokens <= _MB_BUFFER_MID_MAX_BATCHED_TOKENS
+    ):
+        return _MB_BUFFER_MID_DEFAULT
     return None
 
 
