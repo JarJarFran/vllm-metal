@@ -1901,38 +1901,6 @@ class TestMetalPlatform:
         assert os.environ["MLX_MAX_MB_PER_BUFFER"] == "64"
         vm_config.reset_config()
 
-    @pytest.mark.parametrize(
-        ("total_gib", "batched", "expected"),
-        [
-            (64, 2048, "1000"),  # 64 GB class at the serve default
-            (64, 4096, None),  # mid tier keeps to the serve default
-            (48, 2048, None),  # below the mid-tier floor
-            (128, 4096, "2000"),  # the PR #637 tier is unchanged
-        ],
-    )
-    def test_check_and_update_config_mb_default_tiers(
-        self, monkeypatch, total_gib, batched, expected
-    ) -> None:
-        monkeypatch.delenv("MLX_MAX_MB_PER_BUFFER", raising=False)
-        vm_config.reset_config()
-        monkeypatch.setattr(
-            platform_module.psutil,
-            "virtual_memory",
-            lambda: SimpleNamespace(
-                total=total_gib * (1 << 30), available=total_gib * (1 << 29)
-            ),
-        )
-        vllm_config = self._platform_config(
-            scheduler_config=SimpleNamespace(
-                max_num_batched_tokens=batched, max_num_seqs=8
-            ),
-        )
-
-        MetalPlatform.check_and_update_config(vllm_config)
-
-        assert os.environ.get("MLX_MAX_MB_PER_BUFFER") == expected
-        vm_config.reset_config()
-
     def test_check_and_update_config_large_batch_clears_plugin_default(
         self, monkeypatch
     ) -> None:

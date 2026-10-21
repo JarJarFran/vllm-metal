@@ -41,6 +41,15 @@ unset below that, on Ray executors, or when `max_num_batched_tokens` exceeds
 4096 (the #585 startup-failure shape). A value you export yourself always
 wins. Outputs are unaffected.
 
+Below 90 GiB it is opt-in. On a 64 GB M1 Max, exporting
+`MLX_MAX_MB_PER_BUFFER=1000` cut single-stream decode TPOT by about 9–10 % on
+Qwen3.6-35B-A3B-4bit (32K context) and Qwen3.8-27B-4bit (8K), with identical
+greedy outputs. The cost is profiled overhead taken from the KV budget: about
+15–21 GB at `--max-num-batched-tokens 2048` (1–2 GB with MLX's default) and
+19–23 GB at 4096. Check the KV cache size in the startup log before relying on
+it, especially with larger checkpoints. On that machine `2000` failed to start
+at 4096 batched tokens, and `512` was slower than MLX's default.
+
 ## Multimodal Serve Modes
 
 - `auto`: use the text-only compatibility path only for checkpoints on the compatibility allowlist — Qwen3.5/Qwen3.6 **FP8** conditional-generation wrappers (their `*_weight_scale_inv` tensors are not sanitized by the mlx_vlm loader), and architectures without a multimodal adapter (the Qwen3.6 and MoE wrappers). Mistral 3 checkpoints with `mistral` or `ministral3` text have no multimodal adapter, so they load their text backbone through mlx_lm. Non-FP8 Qwen3.5 dense checkpoints (official bf16 and MLX-affine quants) keep the native multimodal path. Gemma 4 checkpoints with vision weights, a loadable HF processor and no speculative decoding serve images through the vision sidecar on the mlx_lm text backbone (see [Supported Models](supported_models.md)); otherwise they stay text-only with a logged reason.
