@@ -949,6 +949,46 @@ def _wrap_model_sanitize(
     return True
 
 
+def ensure_lfm2_vl_torch_outputs(processor: Any) -> None:
+    """Make transformers' LFM2-VL processor honor ``return_tensors="pt"`` again.
+
+    Importing ``mlx_vlm.models.lfm2_vl`` rebinds transformers'
+    ``Lfm2VlProcessor.__init__`` and ``.__call__`` so every instance swaps in
+    mlx-vlm's ``Lfm2VlNumpyImageProcessor``, which returns ``numpy.ndarray``.
+    vLLM's ``NestedTensors`` contract is ``torch.Tensor``, and
+    ``MultiModalFieldConfig.flat_from_sizes`` always builds tuple slices, so
+    ``MultiModalFlatField.build_elems`` asserts "torch.Tensor is required for
+    multiple slices" while the scheduler profiles the encoder budget — the engine
+    dies before serving a request.
+
+    Only ``"pt"`` requests are converted. mlx-vlm asks its own processor for
+    ``"mlx"``, so its forward path keeps the NumPy image processor it needs.
+    """
+    try:
+        from transformers.models.lfm2_vl.processing_lfm2_vl import Lfm2VlProcessor
+    except ImportError as exc:
+        logger.debug("Skipping the LFM2-VL processor conversion: %s", exc)
+        return
+
+    if not isinstance(processor, Lfm2VlProcessor):
+        return
+
+    original = Lfm2VlProcessor.__call__
+    if getattr(original, "_metal_torch_outputs", False):
+        return
+
+    @wraps(original)
+    def call(self: Any, *args: Any, **kwargs: Any) -> Any:
+        output = original(self, *args, **kwargs)
+        if kwargs.get("return_tensors") == "pt":
+            output.convert_to_tensors("pt")
+        return output
+
+    call._metal_torch_outputs = True
+    Lfm2VlProcessor.__call__ = call
+    logger.debug("LFM2-VL processor output will be converted to torch tensors")
+
+
 @contextmanager
 def embedding_load_scope(*, enabled: bool = True) -> Iterator[None]:
     """Mark the wrapped model load as embedding-only for compat shims.
